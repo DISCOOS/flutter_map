@@ -81,6 +81,7 @@ class MapOptions {
   final bool debug;
   final bool interactive;
   final TapCallback onTap;
+  final TapCallback onLongPress;
   final PositionCallback onPositionChanged;
   final List<MapPlugin> plugins;
   LatLng center;
@@ -97,6 +98,7 @@ class MapOptions {
     this.debug = false,
     this.interactive = true,
     this.onTap,
+    this.onLongPress,
     this.onPositionChanged,
     this.plugins = const [],
     this.swPanBoundary,

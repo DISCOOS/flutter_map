@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_map/src/core/point.dart';
+import 'package:flutter_map/src/core/util.dart' as util;
 import 'package:flutter_map/src/map/map.dart';
 import 'package:latlong/latlong.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -15,11 +16,14 @@ abstract class MapGestureMixin extends State<FlutterMap>
   double _mapZoomStart;
   Point _focalPointStart;
 
+  LatLng _lastTapPoint;
+
   AnimationController _controller;
   Animation<Offset> _flingAnimation;
-  Offset _animationOffset = Offset.zero;
 
+  Offset _animationOffset = Offset.zero;
   AnimationController _doubleTapController;
+
   Animation _doubleTapAnimation;
 
   FlutterMap get widget;
@@ -97,9 +101,7 @@ abstract class MapGestureMixin extends State<FlutterMap>
   }
 
   void handleTapUp(TapUpDetails details) {
-    if (options.onTap == null) {
-      return;
-    }
+
     // Get the widget's offset
     var renderObject = context.findRenderObject() as RenderBox;
     var boxOffset = renderObject.localToGlobal(Offset.zero);
@@ -107,15 +109,40 @@ abstract class MapGestureMixin extends State<FlutterMap>
     var height = renderObject.size.height;
 
     // convert the point to global coordinates
-    var localPoint = _offsetToPoint(details.globalPosition - boxOffset);
-    var localPointCenterDistance =
-        new Point((width / 2) - localPoint.x, (height / 2) - localPoint.y);
-    var mapCenter = map.project(map.center);
-    var point = mapCenter - localPointCenterDistance;
-    var latlng = map.unproject(point);
+    _lastTapPoint =
+        map.offsetToLatLng(details.globalPosition, boxOffset, width, height);
+  }
+
+  void handleTap() {
+    if (_lastTapPoint == null) {
+      return;
+    }
+
+    var test = _elementHitTest(_lastTapPoint);
 
     // emit the event
-    options.onTap(latlng);
+    if (test != null) {
+      var layer = test.keys.first;
+      if (layer.onTap != null) {
+        layer.onTap(test[layer], _lastTapPoint);
+      }
+    } else if (options.onTap != null) options.onTap(_lastTapPoint);
+  }
+
+  void handleLongPress() {
+    if (_lastTapPoint == null) {
+      return;
+    }
+
+    var test = _elementHitTest(_lastTapPoint);
+
+    // emit the event
+    if (test != null) {
+      var layer = test.keys.first;
+      if (layer.onTap != null) {
+        layer.onLongPress(test[layer], _lastTapPoint);
+      }
+    } else if (options.onTap != null) options.onLongPress(_lastTapPoint);
   }
 
   void handleDoubleTap() {
@@ -166,6 +193,72 @@ abstract class MapGestureMixin extends State<FlutterMap>
 
   Offset _pointToOffset(Point point) {
     return new Offset(point.x.toDouble(), point.y.toDouble());
+  }
+
+  /// Returns a map of the layer and the element touched.
+  Map _elementHitTest(LatLng point) {
+    var offset = map.latlngToOffset(point);
+    var tap = Rect.fromCircle(center: offset, radius: 10.0);
+    for (var layer in widget.layers.reversed) {
+      if (layer is PolygonLayerOptions) {
+        var polygon = _polygonHitTest(tap, layer);
+        if (polygon != null) return {layer: polygon};
+      } else if (layer is PolylineLayerOptions) {
+        var polyline = _polylineHitTest(tap, layer);
+        if (polyline != null) return {layer: polyline};
+      } else if (layer is CircleLayerOptions) {
+        var circle = _circleHitTest(tap, layer);
+        if (circle != null) return {layer: circle};
+      }
+    }
+    return null;
+  }
+
+  /// Returns the first and top-most [Polygon] that overlaps with
+  /// tapped [location].
+  ///
+  /// Returns null if no polygon was touched.
+  Polygon _polygonHitTest(Rect tap, PolygonLayerOptions layer) {
+    for (var polygon in layer.polygons.reversed) {
+      if (tap.overlaps(polygon.bounds)) {
+        for (var i = 0; i < polygon.offsets.length - 1; i++) {
+          if (util.intersects(polygon.offsets[i], polygon.offsets[i + 1], tap)) {
+            return polygon;
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  /// Returns the first and top-most [Polyline] that overlaps with
+  /// tapped [location].
+  ///
+  /// Returns null if no polyline was touched.
+  Polyline _polylineHitTest(Rect tap, PolylineLayerOptions layer) {
+    for (var polyline in layer.polylines.reversed) {
+      if (tap.overlaps(polyline.bounds)) {
+        for (var i = 0; i < polyline.offsets.length - 1; i++) {
+          if (util.intersects(polyline.offsets[i], polyline.offsets[i + 1], tap)) {
+            return polyline;
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  /// Returns the first and top-most [Circle] that overlaps with
+  /// tapped [location].
+  ///
+  /// Returns null if no Circle was touched.
+  CircleMarker _circleHitTest(Rect tap, CircleLayerOptions layer) {
+    for (var circle in layer.circles.reversed) {
+      if (tap.overlaps(Rect.fromCircle(center: circle.offset, radius: 10.0))) {
+        return circle;
+      }
+    }
+    return null;
   }
 
   @override
