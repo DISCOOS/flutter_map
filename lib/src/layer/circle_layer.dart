@@ -37,7 +37,8 @@ class CircleMarker {
 class CircleLayer extends StatelessWidget {
   final CircleLayerOptions circleOpts;
   final MapState map;
-  CircleLayer(this.circleOpts, this.map);
+  final Stream<Null> stream;
+  CircleLayer(this.circleOpts, this.map, this.stream);
 
   Widget build(BuildContext context) {
     return new LayoutBuilder(
@@ -50,7 +51,7 @@ class CircleLayer extends StatelessWidget {
 
   Widget _build(BuildContext context, Size size) {
     return new StreamBuilder<int>(
-      stream: map.onMoved, // a Stream<int> or null
+      stream: stream, // a Stream<int> or null
       builder: (BuildContext context, _) {
         return Container(
           child: Stack(
