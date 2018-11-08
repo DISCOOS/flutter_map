@@ -14,7 +14,8 @@ class CircleLayerOptions extends LayerOptions {
   CircleLayerOptions({
     this.circles = const [],
     this.onTap,
-    this.onLongPres});
+    this.onLongPress
+  });
 }
 
 class CircleMarker {
