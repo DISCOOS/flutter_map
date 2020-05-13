@@ -154,58 +154,70 @@ class TileLayerOptions extends LayerOptions {
   ///
   final Map<String, String> additionalOptions;
 
-  // Tiles will not update more than once every `updateInterval` milliseconds
-  // (default 200) when panning.
-  // It can be 0 (but it will calculating for loading tiles every frame when panning / zooming, flutter is fast)
-  // This can save some fps and even bandwidth
-  // (ie. when fast panning / animating between long distances in short time)
+  /// Tiles will not update more than once every `updateInterval`
+  /// (default 200 milliseconds) when panning.
+  /// It can be null (but it will calculating for loading tiles every frame when panning / zooming, flutter is fast)
+  /// This can save some fps and even bandwidth
+  /// (ie. when fast panning / animating between long distances in short time)
   final Duration updateInterval;
 
-  // Tiles fade in duration in milliseconds (default 100),
-  // it can 0 to avoid fade in
+  /// Tiles fade in duration in milliseconds (default 100),
+  /// it can be null to avoid fade in
   final Duration tileFadeInDuration;
 
-  // If a Tile was loaded with error and if strategy isn't `none` then TileProvider
-  // will be asked to evict Image based on current strategy
-  // (see #576 - even Error Images are cached in flutter)
+  /// Opacity start value when Tile starts fade in (0.0 - 1.0)
+  /// Takes effect if `tileFadeInDuration` is not null
+  final double tileFadeInStart;
+
+  /// Opacity start value when an exists Tile starts fade in with different Url (0.0 - 1.0)
+  /// Takes effect when `tileFadeInDuration` is not null and if `overrideTilesWhenUrlChanges` if true
+  final double tileFadeInStartWhenOverride;
+
+  /// `false`: current Tiles will be first dropped and then reload via new url (default)
+  /// `true`: current Tiles will be visible until new ones aren't loaded (new Tiles are loaded independently)
+  /// @see https://github.com/johnpryan/flutter_map/issues/583
+  final bool overrideTilesWhenUrlChanges;
+
   final EvictErrorTileStrategy evictErrorTileStrategy;
 
-  TileLayerOptions({
-    this.urlTemplate,
-    this.tileSize = 256.0,
-    this.minZoom = 0.0,
-    this.maxZoom = 18.0,
-    this.minNativeZoom,
-    this.maxNativeZoom,
-    this.zoomReverse = false,
-    this.zoomOffset = 0.0,
-    this.additionalOptions = const <String, String>{},
-    this.subdomains = const <String>[],
-    this.keepBuffer = 2,
-    this.backgroundColor = const Color(0xFFE0E0E0),
-    this.placeholderImage,
-    this.errorImage,
-    this.evictErrorTileStrategy = EvictErrorTileStrategy.none,
-    this.tileProvider = const CachedNetworkTileProvider(),
-    this.tms = false,
-    // ignore: avoid_init_to_null
-    this.wmsOptions = null,
-    this.opacity = 1.0,
-    // Tiles will not update more than once every `updateInterval` milliseconds
-    // (default 200) when panning.
-    // It can be 0 (but it will calculating for loading tiles every frame when panning / zooming, flutter is fast)
-    // This can save some fps and even bandwidth
-    // (ie. when fast panning / animating between long distances in short time)
-    int updateInterval = 200,
-    // Tiles fade in duration in milliseconds (default 100),
-    // it can 0 to avoid fade in
-    int tileFadeInDuration = 100,
-    rebuild,
-  })  : updateInterval =
-            updateInterval <= 0 ? null : Duration(milliseconds: updateInterval),
-        tileFadeInDuration = tileFadeInDuration <= 0
-            ? null
-            : Duration(milliseconds: tileFadeInDuration),
+  TileLayerOptions(
+      {this.urlTemplate,
+      this.tileSize = 256.0,
+      this.minZoom = 0.0,
+      this.maxZoom = 18.0,
+      this.minNativeZoom,
+      this.maxNativeZoom,
+      this.zoomReverse = false,
+      this.zoomOffset = 0.0,
+      this.additionalOptions = const <String, String>{},
+      this.subdomains = const <String>[],
+      this.keepBuffer = 2,
+      this.backgroundColor = const Color(0xFFE0E0E0),
+      this.placeholderImage,
+      this.errorImage,
+      this.evictErrorTileStrategy = EvictErrorTileStrategy.none,
+      this.tileProvider = const CachedNetworkTileProvider(),
+      this.tms = false,
+      // ignore: avoid_init_to_null
+      this.wmsOptions = null,
+      this.opacity = 1.0,
+      // Tiles will not update more than once every `updateInterval` milliseconds
+      // (default 200) when panning.
+      // It can be 0 (but it will calculating for loading tiles every frame when panning / zooming, flutter is fast)
+      // This can save some fps and even bandwidth
+      // (ie. when fast panning / animating between long distances in short time)
+      int updateInterval = 200,
+      // Tiles fade in duration in milliseconds (default 100),
+      // it can 0 to avoid fade in
+      int tileFadeInDuration = 100,
+      this.tileFadeInStart = 0.0,
+      this.tileFadeInStartWhenOverride = 0.0,
+      this.overrideTilesWhenUrlChanges = false,
+      rebuild})
+      : updateInterval = updateInterval <= 0 ? null : Duration(milliseconds: updateInterval),
+        tileFadeInDuration = tileFadeInDuration <= 0 ? null : Duration(milliseconds: tileFadeInDuration),
+        assert(tileFadeInStart >= 0.0 && tileFadeInStart <= 1.0),
+        assert(tileFadeInStartWhenOverride >= 0.0 && tileFadeInStartWhenOverride <= 1.0),
         super(rebuild: rebuild);
 }
 
@@ -267,8 +279,7 @@ class WMSTileLayerOptions {
       ..write('&$projectionKey=${Uri.encodeComponent(crs.code)}')
       ..write('&version=${Uri.encodeComponent(version)}')
       ..write('&transparent=$transparent');
-    otherParameters
-        .forEach((k, v) => buffer.write('&$k=${Uri.encodeComponent(v)}'));
+    otherParameters.forEach((k, v) => buffer.write('&$k=${Uri.encodeComponent(v)}'));
     return buffer.toString();
   }
 
@@ -336,6 +347,47 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
     _update(null);
     _moveSub = widget.stream.listen((_) => _handleMove());
 
+    _initThrottleUpdate();
+  }
+
+  @override
+  void didUpdateWidget(TileLayer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    var reloadTiles = false;
+
+    if (oldWidget.options.tileSize != options.tileSize) {
+      _tileSize = CustomPoint(options.tileSize, options.tileSize);
+      reloadTiles = true;
+    }
+
+    if (oldWidget.options.updateInterval != options.updateInterval) {
+      _throttleUpdate?.close();
+      _initThrottleUpdate();
+    }
+
+    if (!reloadTiles) {
+      final oldUrl = oldWidget.options.wmsOptions?._encodedBaseUrl ?? oldWidget.options.urlTemplate;
+      final newUrl = options.wmsOptions?._encodedBaseUrl ?? options.urlTemplate;
+      if (oldUrl != newUrl) {
+        if (options.overrideTilesWhenUrlChanges) {
+          for (var tile in _tiles.values) {
+            tile.imageProvider = options.tileProvider.getImage(_wrapCoords(tile.coords), options);
+            tile.loadTileImage();
+          }
+        } else {
+          reloadTiles = true;
+        }
+      }
+    }
+
+    if (reloadTiles) {
+      _removeAllTiles();
+      _resetView();
+      _update(null);
+    }
+  }
+
+  void _initThrottleUpdate() {
     if (options.updateInterval == null) {
       _throttleUpdate = null;
     } else {
@@ -350,21 +402,19 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
 
   @override
   void dispose() {
-    super.dispose();
-
     _removeAllTiles();
     _moveSub?.cancel();
     options.tileProvider.dispose();
     _throttleUpdate?.close();
+
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     var tilesToRender = _tiles.values.toList()..sort();
 
-    var tileWidgets = <Widget>[
-      for (var tile in tilesToRender) _createTileWidget(tile)
-    ];
+    var tileWidgets = <Widget>[for (var tile in tilesToRender) _createTileWidget(tile)];
 
     return Opacity(
       opacity: options.opacity,
@@ -416,8 +466,7 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
       var tile = _tiles[key];
 
       tile.tileReady = null;
-      tile.dispose(tile.loadError &&
-          options.evictErrorTileStrategy != EvictErrorTileStrategy.none);
+      tile.dispose(tile.loadError && options.evictErrorTileStrategy != EvictErrorTileStrategy.none);
       _tiles.remove(key);
     }
   }
@@ -465,8 +514,7 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
     if (level == null) {
       level = _levels[zoom] = Level();
       level.zIndex = maxZoom;
-      level.origin = map.project(map.unproject(map.getPixelOrigin()), zoom) ??
-          CustomPoint(0.0, 0.0);
+      level.origin = map.project(map.unproject(map.getPixelOrigin()), zoom) ?? CustomPoint(0.0, 0.0);
       level.zoom = zoom;
 
       _setZoomTransform(level, map.center, map.zoom);
@@ -659,23 +707,15 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
     // wrapping
     _wrapX = crs.wrapLng;
     if (_wrapX != null) {
-      var first =
-          (map.project(LatLng(0.0, crs.wrapLng.item1), tileZoom).x / tileSize.x)
-              .floorToDouble();
-      var second =
-          (map.project(LatLng(0.0, crs.wrapLng.item2), tileZoom).x / tileSize.y)
-              .ceilToDouble();
+      var first = (map.project(LatLng(0.0, crs.wrapLng.item1), tileZoom).x / tileSize.x).floorToDouble();
+      var second = (map.project(LatLng(0.0, crs.wrapLng.item2), tileZoom).x / tileSize.y).ceilToDouble();
       _wrapX = Tuple2(first, second);
     }
 
     _wrapY = crs.wrapLat;
     if (_wrapY != null) {
-      var first =
-          (map.project(LatLng(crs.wrapLat.item1, 0.0), tileZoom).y / tileSize.x)
-              .floorToDouble();
-      var second =
-          (map.project(LatLng(crs.wrapLat.item2, 0.0), tileZoom).y / tileSize.y)
-              .ceilToDouble();
+      var first = (map.project(LatLng(crs.wrapLat.item1, 0.0), tileZoom).y / tileSize.x).floorToDouble();
+      var second = (map.project(LatLng(crs.wrapLat.item2, 0.0), tileZoom).y / tileSize.y).ceilToDouble();
       _wrapY = Tuple2(first, second);
     }
   }
@@ -742,8 +782,7 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
       var tile = entry.value;
       var c = tile.coords;
 
-      if (tile.current == true &&
-          (c.z != _tileZoom || !noPruneRange.contains(CustomPoint(c.x, c.y)))) {
+      if (tile.current == true && (c.z != _tileZoom || !noPruneRange.contains(CustomPoint(c.x, c.y)))) {
         tile.current = false;
       }
     }
@@ -777,8 +816,7 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
     _evictErrorTilesBasedOnStrategy(tileRange);
 
     // sort tile queue to load tiles in order of their distance to center
-    queue.sort((a, b) =>
-        (a.distanceTo(tileCenter) - b.distanceTo(tileCenter)).toInt());
+    queue.sort((a, b) => (a.distanceTo(tileCenter) - b.distanceTo(tileCenter)).toInt());
 
     for (var i = 0; i < queue.length; i++) {
       _addTile(queue[i]);
@@ -791,10 +829,8 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
     if (!crs.infinite) {
       // don't load tile if it's out of bounds and not wrapped
       var bounds = _globalTileRange;
-      if ((crs.wrapLng == null &&
-              (coords.x < bounds.min.x || coords.x > bounds.max.x)) ||
-          (crs.wrapLat == null &&
-              (coords.y < bounds.min.y || coords.y > bounds.max.y))) {
+      if ((crs.wrapLng == null && (coords.x < bounds.min.x || coords.x > bounds.max.x)) ||
+          (crs.wrapLat == null && (coords.y < bounds.min.y || coords.y > bounds.max.y))) {
         return false;
       }
     }
@@ -821,8 +857,7 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
       return;
     }
 
-    tile.dispose(tile.loadError &&
-        options.evictErrorTileStrategy != EvictErrorTileStrategy.none);
+    tile.dispose(tile.loadError && options.evictErrorTileStrategy != EvictErrorTileStrategy.none);
     _tiles.remove(key);
   }
 
@@ -834,15 +869,13 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
       tilePos: _getTilePos(coords),
       current: true,
       level: _levels[coords.z],
-      imageProvider:
-          options.tileProvider.getImage(_wrapCoords(coords), options),
+      imageProvider: options.tileProvider.getImage(_wrapCoords(coords), options),
       tileReady: _tileReady,
     );
   }
 
   void _evictErrorTilesBasedOnStrategy(Bounds tileRange) {
-    if (options.evictErrorTileStrategy ==
-        EvictErrorTileStrategy.notVisibleRespectMargin) {
+    if (options.evictErrorTileStrategy == EvictErrorTileStrategy.notVisibleRespectMargin) {
       var toRemove = <String>[];
       for (var entry in _tiles.entries) {
         var tile = entry.value;
@@ -858,15 +891,13 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
         tile.dispose(true);
         _tiles.remove(key);
       }
-    } else if (options.evictErrorTileStrategy ==
-        EvictErrorTileStrategy.notVisible) {
+    } else if (options.evictErrorTileStrategy == EvictErrorTileStrategy.notVisible) {
       var toRemove = <String>[];
       for (var entry in _tiles.entries) {
         var tile = entry.value;
         var c = tile.coords;
 
-        if (tile.loadError &&
-            (!tile.current || !tileRange.contains(CustomPoint(c.x, c.y)))) {
+        if (tile.loadError && (!tile.current || !tileRange.contains(CustomPoint(c.x, c.y)))) {
           toRemove.add(entry.key);
         }
       }
@@ -885,6 +916,8 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
       print(error);
 
       tile.loadError = true;
+    } else {
+      tile.loadError = false;
     }
 
     var key = _tileCoordsToKey(coords);
@@ -893,12 +926,16 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
       return;
     }
 
+    var fadeInStart = tile.loaded == null ? options.tileFadeInStart : options.tileFadeInStartWhenOverride;
     tile.loaded = DateTime.now();
-    if (options.tileFadeInDuration == null ||
-        (tile.loadError && null == options.errorImage)) {
+    if (options.tileFadeInDuration == null || fadeInStart == 1.0 || (tile.loadError && null == options.errorImage)) {
       tile.active = true;
     } else {
-      tile.startFadeInAnimation(options.tileFadeInDuration, this);
+      tile.startFadeInAnimation(
+        options.tileFadeInDuration,
+        this,
+        from: fadeInStart,
+      );
     }
 
     setState(() {});
@@ -924,12 +961,8 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
 
   Coords _wrapCoords(Coords coords) {
     var newCoords = Coords(
-      _wrapX != null
-          ? util.wrapNum(coords.x.toDouble(), _wrapX)
-          : coords.x.toDouble(),
-      _wrapY != null
-          ? util.wrapNum(coords.y.toDouble(), _wrapY)
-          : coords.y.toDouble(),
+      _wrapX != null ? util.wrapNum(coords.x.toDouble(), _wrapX) : coords.x.toDouble(),
+      _wrapY != null ? util.wrapNum(coords.y.toDouble(), _wrapY) : coords.y.toDouble(),
     );
     newCoords.z = coords.z.toDouble();
     return newCoords;
@@ -959,7 +992,7 @@ class Tile implements Comparable<Tile> {
   final String coordsKey;
   final Coords<double> coords;
   final CustomPoint<num> tilePos;
-  final ImageProvider imageProvider;
+  ImageProvider imageProvider;
   final Level level;
 
   bool current;
@@ -969,9 +1002,7 @@ class Tile implements Comparable<Tile> {
   DateTime loaded;
 
   AnimationController animationController;
-  double get opacity => animationController == null
-      ? (active ? 1.0 : 0.0)
-      : animationController.value;
+  double get opacity => animationController == null ? (active ? 1.0 : 0.0) : animationController.value;
 
   // callback when tile is ready / error occurred
   // it maybe be null forinstance when download aborted
@@ -992,10 +1023,20 @@ class Tile implements Comparable<Tile> {
     this.retain = false,
     this.loadError = false,
   }) {
+    loadTileImage();
+  }
+
+  void loadTileImage() {
     try {
+      final oldImageStream = _imageStream;
       _imageStream = imageProvider.resolve(ImageConfiguration());
-      _listener = ImageStreamListener(_tileOnLoad, onError: _tileOnError);
-      _imageStream.addListener(_listener);
+
+      if (_imageStream.key != oldImageStream?.key) {
+        oldImageStream?.removeListener(_listener);
+
+        _listener = ImageStreamListener(_tileOnLoad, onError: _tileOnError);
+        _imageStream.addListener(_listener);
+      }
     } catch (e, s) {
       // make sure all exception is handled - #444 / #536
       _tileOnError(e, s);
@@ -1018,11 +1059,12 @@ class Tile implements Comparable<Tile> {
     _imageStream?.removeListener(_listener);
   }
 
-  void startFadeInAnimation(Duration duration, TickerProvider vsync) {
-    animationController = AnimationController(duration: duration, vsync: vsync)
-      ..addStatusListener(_onAnimateEnd);
+  void startFadeInAnimation(Duration duration, TickerProvider vsync, {double from}) {
+    animationController?.removeStatusListener(_onAnimateEnd);
 
-    animationController.forward();
+    animationController = AnimationController(duration: duration, vsync: vsync)..addStatusListener(_onAnimateEnd);
+
+    animationController.forward(from: from);
   }
 
   void _onAnimateEnd(AnimationStatus status) {
@@ -1040,7 +1082,7 @@ class Tile implements Comparable<Tile> {
 
   void _tileOnError(dynamic exception, StackTrace stackTrace) {
     if (null != tileReady) {
-      tileReady(coords, exception, this);
+      tileReady(coords, exception ?? 'Unknown exception during loadTileImage', this);
     }
   }
 
