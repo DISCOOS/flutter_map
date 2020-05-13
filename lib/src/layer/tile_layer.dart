@@ -180,6 +180,9 @@ class TileLayerOptions extends LayerOptions {
 
   final EvictErrorTileStrategy evictErrorTileStrategy;
 
+  /// When tile layer detects change from `true` to `false` error tiles are evicted and loaded again
+  final bool offline;
+
   TileLayerOptions(
       {this.urlTemplate,
       this.tileSize = 256.0,
@@ -197,6 +200,7 @@ class TileLayerOptions extends LayerOptions {
       this.errorImage,
       this.evictErrorTileStrategy = EvictErrorTileStrategy.none,
       this.tileProvider = const CachedNetworkTileProvider(),
+      this.offline = false,
       this.tms = false,
       // ignore: avoid_init_to_null
       this.wmsOptions = null,
@@ -382,6 +386,10 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
 
     if (reloadTiles) {
       _removeAllTiles();
+      _resetView();
+      _update(null);
+    } else if (oldWidget.options.offline != options.offline && options.offline == false) {
+      _evictTilesWithErrors(all: true);
       _resetView();
       _update(null);
     }
@@ -876,21 +884,7 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
 
   void _evictErrorTilesBasedOnStrategy(Bounds tileRange) {
     if (options.evictErrorTileStrategy == EvictErrorTileStrategy.notVisibleRespectMargin) {
-      var toRemove = <String>[];
-      for (var entry in _tiles.entries) {
-        var tile = entry.value;
-
-        if (tile.loadError && !tile.current) {
-          toRemove.add(entry.key);
-        }
-      }
-
-      for (var key in toRemove) {
-        var tile = _tiles[key];
-
-        tile.dispose(true);
-        _tiles.remove(key);
-      }
+      _evictTilesWithErrors();
     } else if (options.evictErrorTileStrategy == EvictErrorTileStrategy.notVisible) {
       var toRemove = <String>[];
       for (var entry in _tiles.entries) {
@@ -908,6 +902,24 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
         tile.dispose(true);
         _tiles.remove(key);
       }
+    }
+  }
+
+  void _evictTilesWithErrors({bool all = false}) {
+    var toRemove = <String>[];
+    for (var entry in _tiles.entries) {
+      var tile = entry.value;
+
+      if (tile.loadError && (all || !tile.current)) {
+        toRemove.add(entry.key);
+      }
+    }
+
+    for (var key in toRemove) {
+      var tile = _tiles[key];
+
+      tile.dispose(true);
+      _tiles.remove(key);
     }
   }
 
