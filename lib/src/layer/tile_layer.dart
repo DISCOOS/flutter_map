@@ -793,6 +793,10 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
       if (tile.current == true && (c.z != _tileZoom || !noPruneRange.contains(CustomPoint(c.x, c.y)))) {
         tile.current = false;
       }
+
+      if (tile.loadError && options.evictErrorTileStrategy == EvictErrorTileStrategy.dispose) {
+        tile.dispose(true);
+      }
     }
 
     // _update just loads more tiles. If the tile zoom level differs too much
