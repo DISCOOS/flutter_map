@@ -884,6 +884,7 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
       imageProvider: options.tileProvider.getImage(_wrapCoords(coords), options),
       tileReady: _tileReady,
     );
+    _tiles[tileCoordsToKey].loadTileImage();
   }
 
   void _evictErrorTilesBasedOnStrategy(Bounds tileRange) {
@@ -1038,9 +1039,7 @@ class Tile implements Comparable<Tile> {
     this.active = false,
     this.retain = false,
     this.loadError = false,
-  }) {
-    loadTileImage();
-  }
+  });
 
   void loadTileImage() {
     try {
