@@ -408,13 +408,15 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
     }
   }
 
+  bool _disposed = false;
+
   @override
   void dispose() {
     _removeAllTiles();
     _moveSub?.cancel();
     options.tileProvider.dispose();
     _throttleUpdate?.close();
-
+    _disposed = true;
     super.dispose();
   }
 
@@ -729,33 +731,35 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
   }
 
   void _handleMove() {
-    var tileZoom = _clampZoom(map.zoom.roundToDouble());
+    if (mounted && !_disposed) {
+      var tileZoom = _clampZoom(map.zoom.roundToDouble());
 
-    if (_tileZoom == null) {
-      // if there is no _tileZoom available it means we are out within zoom level
-      // we will restory fully via _setView call if we are back on trail
-      if ((options.maxZoom != null && tileZoom <= options.maxZoom) &&
-          (options.minZoom != null && tileZoom >= options.minZoom)) {
-        _tileZoom = tileZoom;
+      if (_tileZoom == null) {
+        // if there is no _tileZoom available it means we are out within zoom level
+        // we will restory fully via _setView call if we are back on trail
+        if ((options.maxZoom != null && tileZoom <= options.maxZoom) &&
+            (options.minZoom != null && tileZoom >= options.minZoom)) {
+          _tileZoom = tileZoom;
+          setState(() {
+            _setView(map.center, tileZoom);
+          });
+        }
+      } else {
         setState(() {
-          _setView(map.center, tileZoom);
+          if ((tileZoom - _tileZoom).abs() >= 1) {
+            // It was a zoom lvl change
+            _setView(map.center, tileZoom);
+          } else {
+            if (null == _throttleUpdate) {
+              _update(null);
+            } else {
+              _throttleUpdate.add(null);
+            }
+
+            _setZoomTransforms(map.center, map.zoom);
+          }
         });
       }
-    } else {
-      setState(() {
-        if ((tileZoom - _tileZoom).abs() >= 1) {
-          // It was a zoom lvl change
-          _setView(map.center, tileZoom);
-        } else {
-          if (null == _throttleUpdate) {
-            _update(null);
-          } else {
-            _throttleUpdate.add(null);
-          }
-
-          _setZoomTransforms(map.center, map.zoom);
-        }
-      });
     }
   }
 
@@ -929,6 +933,10 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
   }
 
   void _tileReady(Coords<double> coords, dynamic error, Tile tile) {
+    if (!mounted || _disposed) {
+      return;
+    }
+
     if (null != error) {
       print(error);
 
@@ -965,7 +973,7 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
             ? options.tileFadeInDuration + const Duration(milliseconds: 50)
             : const Duration(milliseconds: 50),
         () {
-          if (mounted) {
+          if (mounted && !_disposed) {
             setState(_pruneTiles);
           }
         },
@@ -1060,8 +1068,11 @@ class Tile implements Comparable<Tile> {
     }
   }
 
+  bool _disposed = false;
+
   // call this before GC!
   void dispose([bool evict = false]) {
+    _disposed = true;
     if (evict && imageProvider != null) {
       try {
         imageProvider.evict().catchError(print);
@@ -1074,15 +1085,22 @@ class Tile implements Comparable<Tile> {
 
     animationController?.removeStatusListener(_onAnimateEnd);
     animationController?.dispose();
+    animationController = null;
     _imageStream?.removeListener(_listener);
   }
 
-  void startFadeInAnimation(Duration duration, TickerProvider vsync, {double from}) {
-    animationController?.removeStatusListener(_onAnimateEnd);
+  void startFadeInAnimation(Duration duration, TickerProvider vsync, {double from}) async {
+    if (!_disposed) {
+      animationController?.removeStatusListener(_onAnimateEnd);
+      animationController?.dispose();
+      animationController = AnimationController(duration: duration, vsync: vsync)..addStatusListener(_onAnimateEnd);
 
-    animationController = AnimationController(duration: duration, vsync: vsync)..addStatusListener(_onAnimateEnd);
-
-    animationController.forward(from: from);
+      try {
+        await animationController.forward(from: from).orCancel;
+      } on Exception catch (e) {
+        // the animation got canceled, probably because we were disposed
+      }
+    }
   }
 
   void _onAnimateEnd(AnimationStatus status) {
